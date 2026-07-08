@@ -37,6 +37,7 @@ PLANNER_TOOLS = [
                         "properties": {
                             "title": {"type": "string", "description": "Название задачи"},
                             "task_type": {"type": "string", "enum": ["work", "study", "rest"], "description": "Тип задачи"},
+                            "duration_min": {"type": "integer", "description": "Длительность в минутах, оцени сам, если не названа"},
                         },
                         "required": ["title"],
                     },
@@ -54,6 +55,7 @@ PLANNER_TOOLS = [
                 "title": {"type": "string", "description": "Название задачи"},
                 "task_type": {"type": "string", "enum": ["work", "study", "rest"], "description": "Тип задачи, по умолчанию work"},
                 "date": {"type": "string", "description": "Дата YYYY-MM-DD, по умолчанию сегодня"},
+                "duration_min": {"type": "integer", "description": "Длительность в минутах. Если пользователь не назвал — оцени реалистично сам (лаба ~120, созвон ~60); не передавай только если оценить невозможно"},
             },
             "required": ["title"],
         },
@@ -254,6 +256,29 @@ def _find_sphere(db_conn, sphere_name):
 
 # --- Реализации tools: обычные функции с SQL ---
 
+# Длительность из конфига сферы, чьё имя встречается в названии задачи:
+# прямой duration_min, для чтения — pages_per_day / pages_per_hour
+def _duration_from_spheres(db_conn, title):
+    title_lower = title.lower()
+    for row in db_conn.execute("SELECT name, sphere_type, config FROM spheres WHERE active = 1"):
+        if row["name"].lower() not in title_lower:
+            continue
+        config = json.loads(row["config"])
+        if config.get("duration_min"):
+            return _round30(config["duration_min"])
+        if row["sphere_type"] == "reading" and config.get("pages_per_day") and config.get("pages_per_hour"):
+            return _round30(config["pages_per_day"] / config["pages_per_hour"] * 60)
+    return None
+
+
+# Итоговая длительность задачи: явная/оценка LLM важнее, потом конфиг
+# сферы; None — так и не определили, генератор оценит при перепланировании
+def _resolve_duration(db_conn, title, duration_min):
+    if duration_min:
+        return _round30(duration_min)
+    return _duration_from_spheres(db_conn, title)
+
+
 def tool_create_daily_plan(db_conn, date, tasks):
     # Если активный план дня на эту дату уже есть — дополняем его
     existing = db_conn.execute(
@@ -274,17 +299,20 @@ def tool_create_daily_plan(db_conn, date, tasks):
     added_titles = []
     for task in tasks:
         task_type = task.get("task_type") or "work"
+        duration = _resolve_duration(db_conn, task["title"], task.get("duration_min"))
         db_conn.execute(
-            "INSERT INTO tasks (plan_id, title, task_type, scheduled_date) VALUES (?, ?, ?, ?)",
-            (plan_id, task["title"], task_type, date),
+            "INSERT INTO tasks (plan_id, title, task_type, scheduled_date, duration_min) VALUES (?, ?, ?, ?, ?)",
+            (plan_id, task["title"], task_type, date, duration),
         )
         added_titles.append(task["title"])
 
+    _recompute_daily_stats(db_conn, date)
     return f"{plan_note} Задачи ({len(added_titles)}): " + "; ".join(added_titles)
 
 
-def tool_add_task(db_conn, title, task_type="work", date=None):
+def tool_add_task(db_conn, title, task_type="work", date=None, duration_min=None):
     scheduled_date = date or _today()
+    duration = _resolve_duration(db_conn, title, duration_min)
     # Прикрепляем к плану дня этой даты, если он существует
     plan = db_conn.execute(
         "SELECT id FROM plans WHERE plan_type = 'daily' AND date_from = ? AND status = 'active'",
@@ -292,11 +320,13 @@ def tool_add_task(db_conn, title, task_type="work", date=None):
     ).fetchone()
     plan_id = plan["id"] if plan else None
     db_conn.execute(
-        "INSERT INTO tasks (plan_id, title, task_type, scheduled_date) VALUES (?, ?, ?, ?)",
-        (plan_id, title, task_type, scheduled_date),
+        "INSERT INTO tasks (plan_id, title, task_type, scheduled_date, duration_min) VALUES (?, ?, ?, ?, ?)",
+        (plan_id, title, task_type, scheduled_date, duration),
     )
+    _recompute_daily_stats(db_conn, scheduled_date)
     attached = "в план дня" if plan_id else "вне плана (плана на эту дату нет)"
-    return f"Добавил задачу «{title}» ({task_type}) на {scheduled_date}, {attached}."
+    duration_note = f", ~{duration} мин" if duration else ""
+    return f"Добавил задачу «{title}» ({task_type}{duration_note}) на {scheduled_date}, {attached}."
 
 
 def tool_complete_task(db_conn, task_title):
@@ -458,10 +488,10 @@ def tool_show_today(db_conn, date=None):
 # заменяет невыполненные задачи даты новыми, done не трогает
 def _rebuild_day(db_conn, date, notes, window_start):
     carry_rows = db_conn.execute(
-        "SELECT title, task_type FROM tasks WHERE scheduled_date = ? AND status = 'pending'",
+        "SELECT title, task_type, duration_min FROM tasks WHERE scheduled_date = ? AND status = 'pending'",
         (date,),
     ).fetchall()
-    carry_tasks = [{"title": row["title"], "task_type": row["task_type"]} for row in carry_rows]
+    carry_tasks = [dict(row) for row in carry_rows]
     done_rows = db_conn.execute(
         "SELECT title, time_start, duration_min FROM tasks WHERE scheduled_date = ? AND status = 'done'",
         (date,),

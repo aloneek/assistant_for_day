@@ -43,19 +43,19 @@ SPHERES = [
         "name": "книга",
         "sphere_type": "reading",
         "priority": 60,
-        "config": {"pages_per_day": 30},
+        "config": {"pages_per_day": 30, "pages_per_hour": 30},
     },
     {
         "name": "фильм",
         "sphere_type": "leisure",
         "priority": 30,
-        "config": {"per_day": 1},
+        "config": {"per_day": 1, "duration_min": 120},
     },
     {
         "name": "прогулка",
         "sphere_type": "leisure",
         "priority": 40,
-        "config": {"adaptive": True},
+        "config": {"adaptive": True, "duration_min": 60},
     },
     {
         "name": "готовка",
@@ -67,7 +67,7 @@ SPHERES = [
         "name": "подтягивания",
         "sphere_type": "fitness",
         "priority": 50,
-        "config": {"weighted": True},
+        "config": {"weighted": True, "duration_min": 30},
     },
 ]
 

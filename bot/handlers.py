@@ -1,0 +1,68 @@
+# ============================================
+# Обработчики Telegram: /start, текст, кнопки задач
+# ============================================
+
+import asyncio
+import logging
+
+from aiogram import F, Router
+from aiogram.filters import CommandStart
+from aiogram.types import CallbackQuery, Message
+
+from agents import orchestrator, planner
+from bot.keyboards import build_plan_keyboard, mark_task_done_in_text
+
+router = Router()
+logger = logging.getLogger(__name__)
+
+WELCOME_TEXT = (
+    "Привет! Я твой ассистент: помогаю с планом дня, развитием навыков, "
+    "идеями и балансом работы и отдыха.\n\n"
+    "Напиши или наговори голосом, что нужно — например:\n"
+    "• «составь план на завтра: лаба по физике, урок aiogram, прогулка»\n"
+    "• «покажи план на сегодня»\n"
+    "• «я сделал лабу»\n"
+    "• «какие у меня навыки?»"
+)
+
+ERROR_TEXT = "Что-то пошло не так, попробуй ещё раз."
+
+
+@router.message(CommandStart())
+async def on_start(message: Message):
+    await message.answer(WELCOME_TEXT)
+
+
+# Общий путь текста и распознанного голоса: оркестратор → ответ.
+# LLM-вызовы блокирующие, поэтому уводим их из event loop в поток.
+async def process_user_text(message: Message, user_text: str, db_conn):
+    await message.bot.send_chat_action(message.chat.id, "typing")
+    try:
+        answer = await asyncio.to_thread(orchestrator.handle_message, user_text, db_conn)
+    except Exception:
+        # Полный traceback — в лог, пользователю — человеческое сообщение
+        logger.exception("Ошибка обработки сообщения: %r", user_text)
+        await message.answer(ERROR_TEXT)
+        return
+    await message.answer(answer, reply_markup=build_plan_keyboard(answer))
+
+
+@router.message(F.text)
+async def on_text(message: Message, db_conn):
+    await process_user_text(message, message.text, db_conn)
+
+
+# Кнопка «✅ Выполнено»: прямой UPDATE в БД без LLM,
+# статус в сообщении с планом меняется на месте
+@router.callback_query(F.data.startswith("task_done:"))
+async def on_task_done(callback: CallbackQuery, db_conn):
+    task_id = int(callback.data.split(":", 1)[1])
+    task_title = planner.complete_task_by_id(db_conn, task_id)
+    if task_title is None:
+        await callback.answer("Задача не найдена")
+        return
+
+    new_text = mark_task_done_in_text(callback.message.text, task_id)
+    if new_text != callback.message.text:
+        await callback.message.edit_text(new_text, reply_markup=build_plan_keyboard(new_text))
+    await callback.answer(f"«{task_title}» выполнена 🎉")

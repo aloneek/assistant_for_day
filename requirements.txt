@@ -1,0 +1,6 @@
+aiogram
+python-dotenv
+google-genai
+groq
+faster-whisper
+apscheduler

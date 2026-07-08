@@ -1,0 +1,14 @@
+# Секреты — никогда не коммитим
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Локальная база
+*.db
+
+# macOS
+.DS_Store

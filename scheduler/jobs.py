@@ -7,7 +7,7 @@
 import asyncio
 import logging
 
-from agents import muse
+from agents import github_sync, muse
 from bot.keyboards import build_idea_keyboard
 from bot.messaging import split_message
 from config import TELEGRAM_CHAT_ID
@@ -20,6 +20,13 @@ def register_jobs(scheduler, bot, db_conn):
     # пора ли — интервал MUSE_INTERVAL_DAYS + тихие часы вне окна
     # бодрствования из профиля. Генерация запускается только когда пора
     scheduler.add_job(muse_tick, "interval", hours=1, args=[bot, db_conn])
+    # Раз в неделю обновляем профиль проектов из GitHub (тихо, без сообщения)
+    scheduler.add_job(github_tick, "cron", day_of_week="mon", hour=12, args=[db_conn])
+
+
+async def github_tick(db_conn):
+    result = await asyncio.to_thread(github_sync.run, db_conn)
+    logger.info("Недельный sync_github: %s", result.split(chr(10))[0])
 
 
 async def muse_tick(bot, db_conn):

@@ -2,7 +2,7 @@
 # Оркестратор: маршрутизирует запрос к суб-агентам
 # ============================================
 
-from agents import coach, explorer, planner
+from agents import coach, explorer, github_sync, planner
 from config import load_prompt
 from llm.router import get_provider
 
@@ -46,6 +46,11 @@ TOOLS = [
         },
     },
     {
+        "name": "sync_github",
+        "description": "Обновить профиль проектов из GitHub пользователя: «подтяни/обнови мои проекты с гитхаба», «синхронизируй github». Без аргументов.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
         "name": "direct_answer",
         "description": "Прямой ответ без суб-агентов: болтовня, общие вопросы, уточнение непонятного запроса.",
         "parameters": {
@@ -83,6 +88,8 @@ def handle_message(user_text, db_conn):
         return explorer.run(tool_args["idea_title"], tool_args["idea_description"], db_conn)
     if tool_name == "coach":
         return coach.run(tool_args["user_request"], db_conn)
+    if tool_name == "sync_github":
+        return github_sync.run(db_conn)
 
     # Модель вызвала неизвестный tool — не должно случаться
     return "Не понял запрос, попробуй переформулировать."

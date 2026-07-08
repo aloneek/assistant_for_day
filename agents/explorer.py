@@ -62,13 +62,18 @@ async def _search_all(queries):
     return results
 
 
-def _synthesize(idea_title, idea_description, queries, results):
+def _synthesize(idea_title, idea_description, queries, results, projects):
     provider = get_provider("explorer")
     user_message = (
         f"# Идея\n\n{idea_title}\n\n{idea_description}\n\n"
         f"# Поисковые запросы\n\n{json.dumps(queries, ensure_ascii=False)}\n\n"
         f"# Результаты поиска\n\n{json.dumps(results, ensure_ascii=False)}"
     )
+    if projects:
+        user_message += (
+            "\n\n# Проекты пользователя (учитывай при оценке отличий и ниши: "
+            f"что он уже умеет и делал)\n\n{projects}"
+        )
     response = provider.chat([
         {"role": "system", "content": load_prompt("explorer_synthesis")},
         {"role": "user", "content": user_message},
@@ -114,7 +119,11 @@ def explore_idea(idea_id, idea_title, idea_description, db_conn):
             "сейчас недоступны — попробуй исследовать позже."
         )
 
-    synthesis = _synthesize(idea_title, idea_description, queries, results)
+    projects_row = db_conn.execute(
+        "SELECT value FROM user_context WHERE key = 'projects'"
+    ).fetchone()
+    synthesis = _synthesize(idea_title, idea_description, queries, results,
+                            projects_row["value"] if projects_row else None)
     db_conn.execute(
         "UPDATE ideas SET exploration_result = ?, status = 'explored' WHERE id = ?",
         (synthesis, idea_id),

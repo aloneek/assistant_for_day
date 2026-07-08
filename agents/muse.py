@@ -108,9 +108,17 @@ def _build_request(db_conn, trends):
     seed_skill = random.choice(skills) if skills else random.choice(spheres)["name"]
     seed_trend = random.choice(trends)["title"]
 
+    projects = db_conn.execute(
+        "SELECT value FROM user_context WHERE key = 'projects'"
+    ).fetchone()
+
     sections = [
         "# Сферы развития\n\n" + json.dumps(spheres, ensure_ascii=False),
         "# Навыки\n\n" + json.dumps(skills, ensure_ascii=False),
+    ]
+    if projects:
+        sections.append("# Мои проекты на GitHub (не предлагать то же самое)\n\n" + projects["value"])
+    sections += [
         "# Существующие идеи (НЕ повторять)\n\n" + json.dumps(existing_ideas, ensure_ascii=False),
         "# Свежие тренды\n\n" + json.dumps(trends, ensure_ascii=False),
         f"# Случайное скрещивание\n\n«{seed_skill}» × «{seed_trend}»",

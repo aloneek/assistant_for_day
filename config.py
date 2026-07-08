@@ -28,6 +28,9 @@ YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 # У неё отдельная неистраченная квота 20 RPD — видео-запросы редкие
 VIDEO_MODEL = "gemini-3.5-flash"
 
+# Чей GitHub синхронизировать в профиль проектов (sync_github)
+GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "aloneek")
+
 # Куда Muse шлёт проактивные идеи (личный chat id пользователя).
 # Пусто — проактивные сообщения выключены
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -63,6 +66,8 @@ AGENT_MODELS = {
     "muse": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
     # текстовая деградация analyze_videos, когда видео-лимит исчерпан
     "video_meta": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
+    # сжатие GitHub-реп в профиль проектов
+    "github_sync": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
 }
 
 

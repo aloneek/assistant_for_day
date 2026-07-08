@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS plans (
     FOREIGN KEY (idea_id) REFERENCES ideas(id) ON DELETE SET NULL
 );
 
--- Задачи: единицы плана дня
+-- Задачи: единицы плана дня (блоки по 30 минут при генерации из сфер)
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id INTEGER,                    -- к какому плану относится (NULL = вне плана)
@@ -23,10 +23,37 @@ CREATE TABLE IF NOT EXISTS tasks (
     task_type TEXT NOT NULL DEFAULT 'work' CHECK (task_type IN ('work', 'study', 'rest')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'skipped')),
     scheduled_date TEXT,                -- YYYY-MM-DD, на какой день назначена
+    sphere_id INTEGER REFERENCES spheres(id) ON DELETE SET NULL,  -- из какой сферы (NULL = вне сфер)
+    time_start TEXT,                    -- HH:MM, начало блока в плане дня
+    duration_min INTEGER,               -- длительность блока, кратна 30
     completed_at TEXT,                  -- когда фактически выполнена
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE SET NULL
 );
+
+-- Сферы развития: источники, из которых генерируется план дня
+CREATE TABLE IF NOT EXISTS spheres (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,          -- python, матан, книга, ...
+    sphere_type TEXT NOT NULL CHECK (sphere_type IN ('learning', 'reading', 'fitness', 'leisure', 'food')),
+    config TEXT NOT NULL DEFAULT '{}',  -- JSON: параметры сферы (pages_per_day, deadline, ...)
+    priority INTEGER NOT NULL DEFAULT 0,-- выше значение = важнее при нехватке времени в дне
+    active INTEGER NOT NULL DEFAULT 1,  -- 0 = сфера на паузе, в план не попадает
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Журнал прогресса по сферам: страницы, подходы, просмотренные фильмы
+CREATE TABLE IF NOT EXISTS sphere_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sphere_id INTEGER NOT NULL,
+    log_date TEXT NOT NULL,             -- YYYY-MM-DD
+    value TEXT NOT NULL DEFAULT '{}',   -- JSON: {"pages": 30} / {"reps": 8, "weight_kg": 10}
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (sphere_id) REFERENCES spheres(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sphere_log_date ON sphere_log(sphere_id, log_date);
 
 -- Навыки: что я умею и что изучаю
 CREATE TABLE IF NOT EXISTS skills (

@@ -21,7 +21,8 @@ Telegram (aiogram 3)
    │               прогресс, навыки                    [готов]
    ├── Explorer  — поиск аналогов идей: arXiv,
    │               Semantic Scholar, GitHub Search     [готов]
-   ├── Muse      — проактивная генерация идей по крону [фаза 3]
+   ├── Muse      — проактивные идеи: Хабр + HN + arXiv
+   │               × мой контекст, раз в N дней         [готов]
    └── Coach     — ревью недели, адаптивная нагрузка   [фаза 3]
    ▼
 SQLite (plans, tasks, skills, ideas, user_context, daily_stats)
@@ -45,8 +46,8 @@ bot/         обработчики Telegram: текст, голос, кнопк
 db/          схема SQLite, подключение, сид сфер и профиля
 llm/         абстракция LLMProvider, провайдеры Gemini и Groq, роутер, JSON-запросы
 prompts/     системные промпты агентов (markdown)
-search/      клиенты arXiv, Semantic Scholar, GitHub Search (httpx, параллельно)
-scheduler/   фоновые задачи APScheduler (фаза 3)
+search/      клиенты arXiv, Semantic Scholar, GitHub, Хабр RSS, HN (httpx, параллельно)
+scheduler/   фоновые джобы APScheduler: проактивные идеи Muse
 main.py      точка входа: сборка бота и polling
 ```
 
@@ -59,6 +60,8 @@ cp .env.example .env   # заполнить ключи
 python3 main.py
 ```
 
+Деплой на VPS (systemd, journald, бэкапы) — в [DEPLOY.md](DEPLOY.md).
+
 ## Стек
 
 Python 3.13 · aiogram 3 · SQLite · google-genai · groq · faster-whisper · httpx
@@ -68,6 +71,7 @@ Python 3.13 · aiogram 3 · SQLite · google-genai · groq · faster-whisper · 
 - [x] MVP: бот + оркестратор + Planner + память + голос
 - [x] План дня из «сфер развития» (learning / reading / fitness / leisure / food) с генерацией блоками по 30 минут и перепланированием остатка дня
 - [x] Explorer: идея → что уже сделано, чем отличается, где ниша
-- [ ] Muse: проактивные идеи из Хабра / HackerNews / arXiv × мой контекст
+- [x] Muse: проактивные идеи из Хабра / HackerNews / arXiv × мой контекст,
+      кнопки «🔍 Исследовать» и «📥 В архив», тихие часы по профилю
 - [ ] Coach: недельные ревью, адаптивная нагрузка, отдых
-- [ ] Деплой на Railway
+- [ ] Деплой на VPS — см. [DEPLOY.md](DEPLOY.md)

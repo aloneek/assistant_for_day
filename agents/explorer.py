@@ -76,7 +76,7 @@ def _synthesize(idea_title, idea_description, queries, results):
     return response["content"]
 
 
-# Точка входа: вызывается оркестратором
+# Точка входа: вызывается оркестратором с новой идеей пользователя
 def run(idea_title, idea_description, db_conn):
     # Идею сохраняем сразу: даже если исследование упадёт, она не потеряется
     cursor = db_conn.execute(
@@ -85,7 +85,12 @@ def run(idea_title, idea_description, db_conn):
     )
     idea_id = cursor.lastrowid
     db_conn.commit()
+    return explore_idea(idea_id, idea_title, idea_description, db_conn)
 
+
+# Исследование уже сохранённой идеи — используется и оркестратором (run),
+# и кнопкой «🔍 Исследовать» под идеями от Muse
+def explore_idea(idea_id, idea_title, idea_description, db_conn):
     try:
         queries = request_json_array(
             "explorer",

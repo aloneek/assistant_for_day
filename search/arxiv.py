@@ -11,11 +11,13 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 SUMMARY_LIMIT = 300
 
 
-async def search(client, query, limit=5):
+# sort_by="submittedDate" даёт свежие статьи (для Muse),
+# "relevance" — самые близкие по теме (для Explorer)
+async def search(client, query, limit=5, sort_by="relevance"):
     response = await client.get(API_URL, params={
-        "search_query": f"all:{query}",
+        "search_query": query if ":" in query else f"all:{query}",
         "max_results": limit,
-        "sortBy": "relevance",
+        "sortBy": sort_by,
     })
     response.raise_for_status()
 

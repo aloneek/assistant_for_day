@@ -20,6 +20,13 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 # Ключ Semantic Scholar не обязателен: без него меньше лимиты и чаще 429
 S2_API_KEY = os.getenv("S2_API_KEY", "")
 
+# Куда Muse шлёт проактивные идеи (личный chat id пользователя).
+# Пусто — проактивные сообщения выключены
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# Раз в сколько дней Muse приносит идеи (1-3)
+MUSE_INTERVAL_DAYS = int(os.getenv("MUSE_INTERVAL_DAYS", "2"))
+
 # Таймзона пользователя: все «сегодня» и «сейчас» считаются в ней
 # через timeutils.now_local(), а не через системное время
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Moscow")
@@ -45,6 +52,7 @@ AGENT_MODELS = {
     # здесь не только при 429/503, но и при ошибках JSON/валидации плана
     "plan_generator": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
     "explorer": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
+    "muse": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
 }
 
 

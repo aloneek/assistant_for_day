@@ -39,6 +39,14 @@ def build_plan_keyboard(answer_text):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+# Кнопки под идеей от Muse: исследовать через Explorer или убрать в архив
+def build_idea_keyboard(idea_id):
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔍 Исследовать", callback_data=f"idea_explore:{idea_id}"),
+        InlineKeyboardButton(text="📥 В архив", callback_data=f"idea_archive:{idea_id}"),
+    ]])
+
+
 # Правит текст сообщения после нажатия кнопки: меняет иконку задачи
 # на ✅ и пересчитывает строку «Выполнено: N из M»
 def mark_task_done_in_text(message_text, task_id):

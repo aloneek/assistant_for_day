@@ -9,7 +9,7 @@ from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 
-from agents import orchestrator, planner
+from agents import explorer, orchestrator, planner
 from bot.keyboards import build_plan_keyboard, mark_task_done_in_text
 from bot.messaging import split_message
 
@@ -70,3 +70,33 @@ async def on_task_done(callback: CallbackQuery, db_conn):
     if new_text != callback.message.text:
         await callback.message.edit_text(new_text, reply_markup=build_plan_keyboard(new_text))
     await callback.answer(f"«{task_title}» выполнена 🎉")
+
+
+# Кнопка «🔍 Исследовать» под идеей от Muse: полный пайплайн Explorer
+@router.callback_query(F.data.startswith("idea_explore:"))
+async def on_idea_explore(callback: CallbackQuery, db_conn):
+    idea_id = int(callback.data.split(":", 1)[1])
+    idea = db_conn.execute(
+        "SELECT title, description FROM ideas WHERE id = ?", (idea_id,)
+    ).fetchone()
+    if idea is None:
+        await callback.answer("Идея не найдена")
+        return
+
+    await callback.answer("Исследую, это займёт полминуты…")
+    await callback.message.bot.send_chat_action(callback.message.chat.id, "typing")
+    answer = await asyncio.to_thread(
+        explorer.explore_idea, idea_id, idea["title"], idea["description"] or "", db_conn
+    )
+    for part in split_message(answer):
+        await callback.message.answer(part)
+
+
+# Кнопка «📥 В архив»: идея скрывается из выдачи Muse и дедупликации не мешает
+@router.callback_query(F.data.startswith("idea_archive:"))
+async def on_idea_archive(callback: CallbackQuery, db_conn):
+    idea_id = int(callback.data.split(":", 1)[1])
+    db_conn.execute("UPDATE ideas SET status = 'archived' WHERE id = ?", (idea_id,))
+    db_conn.commit()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Идея в архиве 📥")

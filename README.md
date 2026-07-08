@@ -17,9 +17,10 @@ Telegram (aiogram 3)
    │  текст / голос (faster-whisper)
    ▼
 Оркестратор ── один LLM-вызов с tool calling, роутит запрос
-   ├── Planner   — план дня, задачи, навыки          [готов]
+   ├── Planner   — план дня из сфер развития, задачи,
+   │               прогресс, навыки                    [готов]
    ├── Explorer  — поиск аналогов идей: arXiv,
-   │               Semantic Scholar, GitHub Search    [фаза 2]
+   │               Semantic Scholar, GitHub Search     [готов]
    ├── Muse      — проактивная генерация идей по крону [фаза 3]
    └── Coach     — ревью недели, адаптивная нагрузка   [фаза 3]
    ▼
@@ -40,10 +41,11 @@ gemini-3.1-flash-lite (500 RPD) → gemini-2.5-flash (20 RPD) → Groq llama-3.3
 
 ```
 agents/      оркестратор и суб-агенты (planner, explorer, muse, coach)
-bot/         обработчики Telegram: текст, голос, кнопки
-db/          схема SQLite и подключение
-llm/         абстракция LLMProvider, провайдеры Gemini и Groq, роутер
+bot/         обработчики Telegram: текст, голос, кнопки, сплиттер длинных ответов
+db/          схема SQLite, подключение, сид сфер и профиля
+llm/         абстракция LLMProvider, провайдеры Gemini и Groq, роутер, JSON-запросы
 prompts/     системные промпты агентов (markdown)
+search/      клиенты arXiv, Semantic Scholar, GitHub Search (httpx, параллельно)
 scheduler/   фоновые задачи APScheduler (фаза 3)
 main.py      точка входа: сборка бота и polling
 ```
@@ -59,13 +61,13 @@ python3 main.py
 
 ## Стек
 
-Python 3.13 · aiogram 3 · SQLite · google-genai · groq · faster-whisper
+Python 3.13 · aiogram 3 · SQLite · google-genai · groq · faster-whisper · httpx
 
 ## Дорожная карта
 
 - [x] MVP: бот + оркестратор + Planner + память + голос
 - [x] План дня из «сфер развития» (learning / reading / fitness / leisure / food) с генерацией блоками по 30 минут и перепланированием остатка дня
-- [ ] Explorer: идея → что уже сделано, чем отличается, где ниша
+- [x] Explorer: идея → что уже сделано, чем отличается, где ниша
 - [ ] Muse: проактивные идеи из Хабра / HackerNews / arXiv × мой контекст
 - [ ] Coach: недельные ревью, адаптивная нагрузка, отдых
 - [ ] Деплой на Railway

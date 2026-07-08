@@ -22,21 +22,27 @@ def get_connection(check_same_thread=True):
     return conn
 
 
-# Колонки, добавленные в tasks после первого релиза схемы.
+# Колонки, добавленные в таблицы после первого релиза схемы.
 # CREATE IF NOT EXISTS новые колонки в существующую таблицу не добавляет,
 # поэтому для старой базы докидываем их через ALTER TABLE
-TASKS_NEW_COLUMNS = {
-    "sphere_id": "INTEGER REFERENCES spheres(id) ON DELETE SET NULL",
-    "time_start": "TEXT",
-    "duration_min": "INTEGER",
+NEW_COLUMNS = {
+    "tasks": {
+        "sphere_id": "INTEGER REFERENCES spheres(id) ON DELETE SET NULL",
+        "time_start": "TEXT",
+        "duration_min": "INTEGER",
+    },
+    "ideas": {
+        "sources": "TEXT",
+    },
 }
 
 
 def _migrate(conn):
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
-    for column, column_ddl in TASKS_NEW_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} {column_ddl}")
+    for table, columns in NEW_COLUMNS.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, column_ddl in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_ddl}")
 
 
 # Читает schema.sql и применяет к базе, затем догоняет миграции.

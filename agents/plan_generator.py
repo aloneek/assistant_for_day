@@ -1,22 +1,14 @@
 # ============================================
 # Генератор плана дня: сферы + профиль → блоки, кратные 30 минутам.
-# Свой цикл эскалации поверх цепочки моделей: ошибка JSON или
-# валидации → один ретрай той же модели с текстом ошибки в промпте,
-# затем переход к следующей модели (как при 429/503)
+# Запрос JSON и эскалация по цепочке моделей — в llm/structured.py
 # ============================================
 
 import json
-import logging
 import re
 
 from config import load_prompt
-from llm.router import get_provider_chain, is_transient
+from llm.structured import StructuredRequestError, request_json_array
 from timeutils import now_local
-
-logger = logging.getLogger(__name__)
-
-# Попыток на одну модель: первая + один ретрай с текстом ошибки
-ATTEMPTS_PER_MODEL = 2
 
 TIME_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")
 
@@ -79,14 +71,6 @@ def _build_request(plan_date, window_start, sleep_time, profile, spheres, carry_
         lines.append(f"# Вводные пользователя\n\n{notes}")
     lines.append("Составь план. Верни только JSON-массив блоков.")
     return "\n\n".join(lines)
-
-
-def _extract_json(text):
-    start = text.find("[")
-    end = text.rfind("]")
-    if start == -1 or end == -1:
-        raise ValueError("в ответе нет JSON-массива")
-    return json.loads(text[start:end + 1])
 
 
 # Проверяет план и приводит к записываемому виду.
@@ -169,35 +153,13 @@ def generate_blocks(db_conn, plan_date, notes="", carry_tasks=None, window_start
     sphere_ids_by_name = {sphere["name"].lower(): sphere["id"] for sphere in spheres}
 
     request = _build_request(plan_date, window_start, sleep_time, profile, spheres, carry_tasks, notes, done_tasks)
-    system_prompt = load_prompt("plan_generator")
 
-    error_feedback = None
-    for provider in get_provider_chain("plan_generator"):
-        for attempt in range(ATTEMPTS_PER_MODEL):
-            user_message = request
-            if error_feedback:
-                user_message += (
-                    f"\n\n# Ошибка прошлой попытки\n\n{error_feedback}\n"
-                    "Исправь её и верни весь JSON-массив заново."
-                )
-            try:
-                response = provider.chat([
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ])
-            except Exception as error:
-                if is_transient(error):
-                    logger.warning("Генерация плана: %s недоступна (%s), следующая модель",
-                                   provider.model, str(error)[:120])
-                    break  # к следующей модели цепочки
-                raise
-
-            try:
-                raw_blocks = _extract_json(response["content"])
-                return _validate_blocks(raw_blocks, start_min, end_min, sphere_ids_by_name)
-            except (ValueError, json.JSONDecodeError) as error:
-                error_feedback = str(error)
-                logger.warning("Генерация плана: %s, попытка %d — %s",
-                               provider.model, attempt + 1, error_feedback)
-
-    raise PlanGenerationError("Ни одна модель не вернула корректный план")
+    try:
+        return request_json_array(
+            "plan_generator",
+            load_prompt("plan_generator"),
+            request,
+            lambda raw_blocks: _validate_blocks(raw_blocks, start_min, end_min, sphere_ids_by_name),
+        )
+    except StructuredRequestError as error:
+        raise PlanGenerationError(str(error))

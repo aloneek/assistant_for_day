@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 
 from agents import orchestrator, planner
 from bot.keyboards import build_plan_keyboard, mark_task_done_in_text
+from bot.messaging import split_message
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -44,7 +45,10 @@ async def process_user_text(message: Message, user_text: str, db_conn):
         logger.exception("Ошибка обработки сообщения: %r", user_text)
         await message.answer(ERROR_TEXT)
         return
-    await message.answer(answer, reply_markup=build_plan_keyboard(answer))
+    # Длинный ответ — несколькими сообщениями; кнопки задач строятся
+    # по каждой части отдельно, так что план не теряет «✅ Выполнено»
+    for part in split_message(answer):
+        await message.answer(part, reply_markup=build_plan_keyboard(part))
 
 
 @router.message(F.text)

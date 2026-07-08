@@ -17,6 +17,8 @@ load_dotenv(BASE_DIR / ".env")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+# Ключ Semantic Scholar не обязателен: без него меньше лимиты и чаще 429
+S2_API_KEY = os.getenv("S2_API_KEY", "")
 
 # Таймзона пользователя: все «сегодня» и «сейчас» считаются в ней
 # через timeutils.now_local(), а не через системное время
@@ -42,6 +44,7 @@ AGENT_MODELS = {
     # ключ, чтобы менять модель независимо от Planner. Эскалация по цепочке
     # здесь не только при 429/503, но и при ошибках JSON/валидации плана
     "plan_generator": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
+    "explorer": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
 }
 
 

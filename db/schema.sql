@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS ideas (
     origin TEXT NOT NULL DEFAULT 'user' CHECK (origin IN ('user', 'muse')),
     status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'explored', 'in_progress', 'rejected', 'archived')),
     exploration_result TEXT,            -- вывод Explorer: аналоги, отличия, ниша
+    sources TEXT,                       -- JSON: сырые результаты поиска (arXiv, S2, GitHub)
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

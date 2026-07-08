@@ -72,7 +72,12 @@ def _get_single_provider(model_name):
 
 def get_provider(agent_name):
     if agent_name not in _chain_cache:
-        model_names = AGENT_MODELS[agent_name]
-        providers = [_get_single_provider(name) for name in model_names]
-        _chain_cache[agent_name] = FallbackProvider(providers)
+        _chain_cache[agent_name] = FallbackProvider(get_provider_chain(agent_name))
     return _chain_cache[agent_name]
+
+
+# Список отдельных провайдеров цепочки — для кода, которому нужен
+# свой цикл эскалации (генератор плана эскалирует не только при 429/503,
+# но и при ошибках парсинга/валидации, FallbackProvider так не умеет)
+def get_provider_chain(agent_name):
+    return [_get_single_provider(name) for name in AGENT_MODELS[agent_name]]

@@ -18,6 +18,10 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+# Таймзона пользователя: все «сегодня» и «сейчас» считаются в ней
+# через timeutils.now_local(), а не через системное время
+TIMEZONE = os.getenv("TIMEZONE", "Europe/Moscow")
+
 # Путь к базе SQLite
 DB_PATH = BASE_DIR / "db" / "assistant.db"
 
@@ -34,6 +38,10 @@ PROMPTS_DIR = BASE_DIR / "prompts"
 AGENT_MODELS = {
     "orchestrator": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
     "planner": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
+    # Генератор плана дня (LLM-вызов внутри generate_day_plan): отдельный
+    # ключ, чтобы менять модель независимо от Planner. Эскалация по цепочке
+    # здесь не только при 429/503, но и при ошибках JSON/валидации плана
+    "plan_generator": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
 }
 
 

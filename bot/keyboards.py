@@ -6,9 +6,13 @@ import re
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# Строка невыполненной задачи в выводе show_today:
+# Строка невыполненной задачи в выводе show_today, время опционально:
 #   ⬜️ [7] Урок aiogram (study)
-PENDING_TASK_LINE = re.compile(r"^⬜️ \[(\d+)\] (.+?)(?: \((?:work|study|rest)\))?$", re.MULTILINE)
+#   ⬜️ [7] 09:00–10:00 · Урок aiogram (study)
+PENDING_TASK_LINE = re.compile(
+    r"^⬜️ \[(\d+)\] (?:\d{1,2}:\d{2}–\d{1,2}:\d{2} · )?(.+?)(?: \((?:work|study|rest)\))?$",
+    re.MULTILINE,
+)
 
 # Любая строка задачи (для пересчёта счётчика)
 ANY_TASK_LINE = re.compile(r"^(⬜️|✅|⏭) \[\d+\]", re.MULTILINE)

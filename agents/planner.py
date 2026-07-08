@@ -2,11 +2,12 @@
 # Planner: план дня и план развития
 # ============================================
 
-import datetime
 import json
 
+from agents.plan_generator import PlanGenerationError, generate_blocks, load_profile
 from config import load_prompt
 from llm.router import get_provider
+from timeutils import now_local, today_local
 
 # Сколько tool-вызовов подряд разрешаем за один запрос
 MAX_TOOL_STEPS = 5
@@ -77,6 +78,75 @@ PLANNER_TOOLS = [
         },
     },
     {
+        "name": "generate_day_plan",
+        "description": "Сгенерировать план дня из сфер развития (учёба, чтение, спорт, отдых, еда) блоками по 30 минут. Использовать, когда пользователь просто просит составить/сгенерировать план дня. Уже существующие невыполненные задачи дня сохранятся и будут вписаны в план.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "Дата плана YYYY-MM-DD, по умолчанию сегодня"},
+                "notes": {"type": "string", "description": "Вводные пользователя: пары до 15:00, вечером встреча, устал и т.п."},
+            },
+        },
+    },
+    {
+        "name": "replan_day",
+        "description": "Пересобрать остаток сегодняшнего дня: выполненные задачи не трогаются, невыполненные перераскладываются с текущего момента с учётом нового вводного.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "notes": {"type": "string", "description": "Что изменилось: освободился в 16, добавилась встреча, нет сил и т.п."},
+            },
+        },
+    },
+    {
+        "name": "log_progress",
+        "description": "Записать прогресс по сфере: прочитанные страницы, подходы подтягиваний, просмотренный фильм и т.п.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sphere_name": {"type": "string", "description": "Имя сферы или его часть: книга, подтягивания, матан"},
+                "value": {
+                    "type": "object",
+                    "description": "Значение прогресса, ключи по смыслу сферы",
+                    "properties": {
+                        "pages": {"type": "integer", "description": "Прочитано страниц"},
+                        "reps": {"type": "integer", "description": "Повторений в подходе"},
+                        "sets": {"type": "integer", "description": "Число подходов"},
+                        "weight_kg": {"type": "number", "description": "Дополнительный вес, кг"},
+                        "minutes": {"type": "integer", "description": "Потрачено минут"},
+                        "title": {"type": "string", "description": "Название фильма/главы"},
+                    },
+                },
+                "note": {"type": "string", "description": "Свободный комментарий"},
+            },
+            "required": ["sphere_name"],
+        },
+    },
+    {
+        "name": "update_sphere_config",
+        "description": "Изменить настройки сферы: «читаю теперь 40 страниц», «готовка раз в 3 дня». Если на сегодня есть план — он автоматически пересоберётся.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sphere_name": {"type": "string", "description": "Имя сферы или его часть"},
+                "config_updates": {
+                    "type": "object",
+                    "description": "Изменяемые ключи конфига",
+                    "properties": {
+                        "pages_per_day": {"type": "integer", "description": "Страниц в день (чтение)"},
+                        "per_day": {"type": "integer", "description": "Штук в день (фильм)"},
+                        "meals_per_day": {"type": "integer", "description": "Приёмов пищи в день"},
+                        "cook_batch_days": {"type": "integer", "description": "Готовка раз в N дней"},
+                        "deadline": {"type": "string", "description": "Дедлайн YYYY-MM-DD"},
+                        "chapters": {"type": "string", "description": "Главы, например 5-9"},
+                        "goal": {"type": "string", "description": "Цель сферы"},
+                    },
+                },
+            },
+            "required": ["sphere_name", "config_updates"],
+        },
+    },
+    {
         "name": "add_skill",
         "description": "Добавить навык или обновить его уровень.",
         "parameters": {
@@ -97,7 +167,52 @@ PLANNER_TOOLS = [
 
 
 def _today():
-    return datetime.date.today().isoformat()
+    return today_local().isoformat()
+
+
+def _minutes(hhmm):
+    hours, minutes = hhmm.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def _hhmm(total_minutes):
+    return f"{(total_minutes // 60) % 24:02d}:{total_minutes % 60:02d}"
+
+
+# Пересчитывает агрегат дня из таблицы tasks по факту (не инкрементами):
+# replan удаляет и создаёт задачи, инкременты разъехались бы с реальностью
+def _recompute_daily_stats(db_conn, date):
+    row = db_conn.execute(
+        "SELECT COUNT(*) AS total, COALESCE(SUM(status = 'done'), 0) AS done "
+        "FROM tasks WHERE scheduled_date = ?",
+        (date,),
+    ).fetchone()
+    total, done = row["total"], row["done"]
+    rate = round(done / total, 3) if total else None
+    db_conn.execute(
+        "INSERT INTO daily_stats (stat_date, tasks_total, tasks_done, completion_rate) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(stat_date) DO UPDATE SET tasks_total = excluded.tasks_total, "
+        "tasks_done = excluded.tasks_done, completion_rate = excluded.completion_rate",
+        (date, total, done, rate),
+    )
+
+
+# Сфера по имени (частичное совпадение). Возвращает (row, error_text):
+# ровно одна — (row, None), иначе (None, текст для пользователя)
+def _find_sphere(db_conn, sphere_name):
+    matches = db_conn.execute(
+        "SELECT id, name, config FROM spheres WHERE active = 1 AND name LIKE ?",
+        (f"%{sphere_name.strip().lower()}%",),
+    ).fetchall()
+    if len(matches) == 1:
+        return matches[0], None
+    all_names = ", ".join(
+        row["name"] for row in db_conn.execute("SELECT name FROM spheres WHERE active = 1 ORDER BY priority DESC")
+    )
+    if not matches:
+        return None, f"Не нашёл сферу «{sphere_name}». Активные сферы: {all_names}."
+    options = ", ".join(row["name"] for row in matches)
+    return None, f"Под «{sphere_name}» подходит несколько сфер: {options}. Уточни какая."
 
 
 # --- Реализации tools: обычные функции с SQL ---
@@ -164,6 +279,7 @@ def tool_complete_task(db_conn, task_title):
         "UPDATE tasks SET status = 'done', completed_at = datetime('now') WHERE id = ?",
         (task["id"],),
     )
+    _recompute_daily_stats(db_conn, task["scheduled_date"])
     return f"Задача «{task['title']}» отмечена выполненной."
 
 
@@ -174,7 +290,8 @@ def tool_show_today(db_conn, date=None):
         (target_date,),
     ).fetchone()
     tasks = db_conn.execute(
-        "SELECT id, title, task_type, status FROM tasks WHERE scheduled_date = ? ORDER BY id",
+        "SELECT id, title, task_type, status, time_start, duration_min FROM tasks "
+        "WHERE scheduled_date = ? ORDER BY time_start IS NULL, time_start, id",
         (target_date,),
     ).fetchall()
 
@@ -185,10 +302,130 @@ def tool_show_today(db_conn, date=None):
     lines = [header]
     for task in tasks:
         icon = STATUS_ICONS.get(task["status"], "⬜️")
-        lines.append(f"{icon} [{task['id']}] {task['title']} ({task['task_type']})")
+        # Блок со временем: «⬜️ [7] 09:00–10:00 · Матан: глава 5 (study)»
+        if task["time_start"] and task["duration_min"]:
+            time_range = f"{task['time_start']}–{_hhmm(_minutes(task['time_start']) + task['duration_min'])}"
+            lines.append(f"{icon} [{task['id']}] {time_range} · {task['title']} ({task['task_type']})")
+        else:
+            lines.append(f"{icon} [{task['id']}] {task['title']} ({task['task_type']})")
     done_count = sum(1 for task in tasks if task["status"] == "done")
     lines.append(f"Выполнено: {done_count} из {len(tasks)}")
     return "\n".join(lines)
+
+
+# Общий низ generate_day_plan и replan_day: генерирует блоки из сфер,
+# заменяет невыполненные задачи даты новыми, done не трогает
+def _rebuild_day(db_conn, date, notes, window_start):
+    carry_rows = db_conn.execute(
+        "SELECT title, task_type FROM tasks WHERE scheduled_date = ? AND status = 'pending'",
+        (date,),
+    ).fetchall()
+    carry_tasks = [{"title": row["title"], "task_type": row["task_type"]} for row in carry_rows]
+    done_rows = db_conn.execute(
+        "SELECT title, time_start, duration_min FROM tasks WHERE scheduled_date = ? AND status = 'done'",
+        (date,),
+    ).fetchall()
+    done_tasks = [dict(row) for row in done_rows]
+
+    blocks = generate_blocks(db_conn, date, notes=notes, carry_tasks=carry_tasks,
+                             window_start=window_start, done_tasks=done_tasks)
+
+    existing = db_conn.execute(
+        "SELECT id FROM plans WHERE plan_type = 'daily' AND date_from = ? AND status = 'active'",
+        (date,),
+    ).fetchone()
+    if existing:
+        plan_id = existing["id"]
+    else:
+        cursor = db_conn.execute(
+            "INSERT INTO plans (plan_type, title, date_from, date_to) VALUES ('daily', ?, ?, ?)",
+            (f"План на {date}", date, date),
+        )
+        plan_id = cursor.lastrowid
+
+    # Старые pending удаляем: их содержимое уже переразложено в новые блоки
+    db_conn.execute("DELETE FROM tasks WHERE scheduled_date = ? AND status = 'pending'", (date,))
+    for block in blocks:
+        db_conn.execute(
+            "INSERT INTO tasks (plan_id, title, task_type, scheduled_date, sphere_id, time_start, duration_min) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (plan_id, block["title"], block["task_type"], date,
+             block["sphere_id"], block["time_start"], block["duration_min"]),
+        )
+    _recompute_daily_stats(db_conn, date)
+    return tool_show_today(db_conn, date)
+
+
+# Начало окна планирования: на будущую дату — с подъёма (None = решит
+# генератор), на сегодня — с ближайшей получасовой отметки от «сейчас»
+def _window_start_for(db_conn, date):
+    if date != _today():
+        return None
+    now = now_local()
+    rounded_up = ((now.hour * 60 + now.minute + 29) // 30) * 30
+    wake_minutes = _minutes(load_profile(db_conn).get("wake_time", "08:00"))
+    return _hhmm(max(rounded_up, wake_minutes))
+
+
+def tool_generate_day_plan(db_conn, date=None, notes=""):
+    target_date = date or _today()
+    try:
+        return _rebuild_day(db_conn, target_date, notes, _window_start_for(db_conn, target_date))
+    except PlanGenerationError as error:
+        return f"Не получилось сгенерировать план: {error}"
+
+
+def tool_replan_day(db_conn, notes=""):
+    today = _today()
+    try:
+        return _rebuild_day(db_conn, today, notes, _window_start_for(db_conn, today))
+    except PlanGenerationError as error:
+        return f"Не получилось пересобрать план: {error}"
+
+
+def tool_log_progress(db_conn, sphere_name, value=None, note=None):
+    sphere, error_text = _find_sphere(db_conn, sphere_name)
+    if sphere is None:
+        return error_text
+    value_json = json.dumps(value or {}, ensure_ascii=False)
+    db_conn.execute(
+        "INSERT INTO sphere_log (sphere_id, log_date, value, note) VALUES (?, ?, ?, ?)",
+        (sphere["id"], _today(), value_json, note),
+    )
+    note_part = f" ({note})" if note else ""
+    return f"Записал прогресс по «{sphere['name']}»: {value_json}{note_part}"
+
+
+def tool_update_sphere_config(db_conn, sphere_name, config_updates):
+    sphere, error_text = _find_sphere(db_conn, sphere_name)
+    if sphere is None:
+        return error_text
+    config = json.loads(sphere["config"])
+    config.update(config_updates)
+    db_conn.execute(
+        "UPDATE spheres SET config = ? WHERE id = ?",
+        (json.dumps(config, ensure_ascii=False), sphere["id"]),
+    )
+    updates_text = json.dumps(config_updates, ensure_ascii=False)
+    result = f"Конфиг сферы «{sphere['name']}» обновлён: {updates_text}."
+
+    # На сегодня есть активный план — пересобираем его с новым конфигом
+    today = _today()
+    has_plan = db_conn.execute(
+        "SELECT 1 FROM plans WHERE plan_type = 'daily' AND date_from = ? AND status = 'active'",
+        (today,),
+    ).fetchone()
+    if has_plan:
+        try:
+            plan_text = _rebuild_day(
+                db_conn, today,
+                notes=f"изменение настроек сферы «{sphere['name']}»: {updates_text}",
+                window_start=_window_start_for(db_conn, today),
+            )
+            result += f"\nПлан на сегодня пересобран:\n{plan_text}"
+        except PlanGenerationError as error:
+            result += f"\nКонфиг сохранён, но пересобрать план не вышло: {error}"
+    return result
 
 
 def tool_add_skill(db_conn, name, level="learning"):
@@ -218,6 +455,10 @@ TOOL_HANDLERS = {
     "add_task": tool_add_task,
     "complete_task": tool_complete_task,
     "show_today": tool_show_today,
+    "generate_day_plan": tool_generate_day_plan,
+    "replan_day": tool_replan_day,
+    "log_progress": tool_log_progress,
+    "update_sphere_config": tool_update_sphere_config,
     "add_skill": tool_add_skill,
     "list_skills": tool_list_skills,
 }
@@ -225,13 +466,15 @@ TOOL_HANDLERS = {
 
 # Отметить задачу по id — для инлайн-кнопки «✅ Выполнено» (bot/keyboards.py)
 def complete_task_by_id(db_conn, task_id):
-    row = db_conn.execute("SELECT title FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    row = db_conn.execute("SELECT title, scheduled_date FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if row is None:
         return None
     db_conn.execute(
         "UPDATE tasks SET status = 'done', completed_at = datetime('now') WHERE id = ?",
         (task_id,),
     )
+    if row["scheduled_date"]:
+        _recompute_daily_stats(db_conn, row["scheduled_date"])
     db_conn.commit()
     return row["title"]
 
@@ -239,9 +482,12 @@ def complete_task_by_id(db_conn, task_id):
 # Точка входа: запрос от оркестратора → ответ пользователю
 def run(user_request, db_conn):
     provider = get_provider("planner")
-    today = datetime.date.today()
+    now = now_local()
     weekdays = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
-    system_prompt = load_prompt("planner") + f"\n\n# Текущая дата\n\nСегодня {today.isoformat()}, {weekdays[today.weekday()]}."
+    system_prompt = load_prompt("planner") + (
+        f"\n\n# Текущая дата и время\n\nСегодня {now.date().isoformat()}, "
+        f"{weekdays[now.weekday()]}, сейчас {now.strftime('%H:%M')}."
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},

@@ -11,6 +11,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import config
 from bot.handlers import router as handlers_router
+from bot.middleware import AuthMiddleware
 from bot.voice import router as voice_router
 from db.database import get_connection, init_db
 from scheduler.jobs import register_jobs
@@ -35,6 +36,8 @@ async def main():
 
     bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
     dispatcher = Dispatcher()
+    # Авторизация до всех обработчиков: чужие апдейты отбрасываются молча
+    dispatcher.update.outer_middleware(AuthMiddleware())
     dispatcher.include_router(handlers_router)
     dispatcher.include_router(voice_router)
 

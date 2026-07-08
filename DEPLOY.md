@@ -27,19 +27,34 @@ python3 -m venv .venv
 
 ```bash
 cp .env.example .env
-nano .env   # заполнить TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, GROQ_API_KEY, TELEGRAM_CHAT_ID
+nano .env    # заполнить TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, GROQ_API_KEY, TELEGRAM_CHAT_ID
+chmod 600 .env   # ключи не должны читаться другими пользователями
 ```
 
-`TELEGRAM_CHAT_ID` — твой личный chat id, туда Muse шлёт проактивные идеи.
-Узнать проще всего у бота @userinfobot (поле Id).
+`TELEGRAM_CHAT_ID` на проде обязателен: это и адрес для идей Muse, и
+авторизация — бот молча игнорирует все апдейты от других людей.
+Узнать свой id проще всего у бота @userinfobot (поле Id).
 
-## 4. База: схема и сид
+## 4. База: перенос существующей или инициализация с нуля
+
+Если бот уже работал локально — перенеси базу ДО первого старта сервиса,
+чтобы не потерять план, сферы и идеи. На локальной машине:
 
 ```bash
+scp /Users/albertosipov/unik/my_largest_project/global-assistant/db/assistant.db root@<IP-VPS>:/opt/global-assistant/db/assistant.db
+```
+
+Затем на VPS (init_db безопасен для существующей базы — только догонит
+миграции; сид пропустит уже существующие записи):
+
+```bash
+cd /opt/global-assistant
 .venv/bin/python db/database.py
 .venv/bin/python db/seed.py
 chown -R assistant:assistant /opt/global-assistant
 ```
+
+Если базы нет — те же три команды создадут её с нуля.
 
 ## 5. systemd-юнит
 

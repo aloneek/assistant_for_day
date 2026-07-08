@@ -22,7 +22,7 @@ PROFILE = {
     "age": ("18", "fact"),
     "wake_time": ("09:00", "preference"),
     "sleep_time": ("00:00", "preference"),
-    "meal_times": ("14:00,19:00", "preference"),
+    "meal_times": ("10:00,19:00", "preference"),
 }
 
 # --- Сферы развития: из них generate_day_plan собирает день ---

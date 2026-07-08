@@ -14,13 +14,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from db.database import get_connection, init_db
 
-# --- Профиль пользователя: ЗАПОЛНИ РЕАЛЬНЫМИ ЗНАЧЕНИЯМИ ---
+# --- Профиль пользователя ---
 # key → (value, category); времена в HH:MM, meal_times через запятую
 PROFILE = {
-    "weight_kg": ("70", "fact"),
-    "height_cm": ("175", "fact"),
+    "weight_kg": ("55", "fact"),
+    "height_cm": ("181", "fact"),
     "age": ("18", "fact"),
-    "wake_time": ("08:00", "preference"),
+    "wake_time": ("09:00", "preference"),
     "sleep_time": ("00:00", "preference"),
     "meal_times": ("14:00,19:00", "preference"),
 }

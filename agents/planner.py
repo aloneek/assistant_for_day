@@ -2,6 +2,7 @@
 # Planner: план дня и план развития
 # ============================================
 
+import datetime
 import json
 
 from agents.plan_generator import PlanGenerationError, generate_blocks, load_profile
@@ -65,6 +66,18 @@ PLANNER_TOOLS = [
                 "task_title": {"type": "string", "description": "Название задачи или его часть"}
             },
             "required": ["task_title"],
+        },
+    },
+    {
+        "name": "move_task",
+        "description": "Перенести невыполненную задачу на другую дату («перенеси лабу на завтра»). Ищет задачу по названию среди невыполненных за ±7 дней от сегодня; если на целевой день есть план — задача встанет в свободный слот по времени.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Название задачи или его часть"},
+                "target_date": {"type": "string", "description": "Куда перенести, YYYY-MM-DD"},
+            },
+            "required": ["query", "target_date"],
         },
     },
     {
@@ -283,6 +296,110 @@ def tool_complete_task(db_conn, task_title):
     return f"Задача «{task['title']}» отмечена выполненной."
 
 
+# Нечёткое совпадение: подстрока целиком, либо каждое значимое слово
+# запроса совпадает с каким-то словом названия — как подстрока или по
+# общему префиксу от 3 букв («лаба» ~ «лабораторная»). LIKE в SQLite
+# не умеет кириллицу без регистра, поэтому сравниваем в Python
+def _words_alike(query_word, title_word):
+    if query_word in title_word or title_word in query_word:
+        return True
+    prefix = 0
+    for query_char, title_char in zip(query_word, title_word):
+        if query_char != title_char:
+            break
+        prefix += 1
+    return prefix >= 3
+
+
+def _fuzzy_match(query, title):
+    query_lower = query.lower().strip()
+    title_lower = title.lower()
+    if query_lower in title_lower:
+        return True
+    query_words = [word for word in query_lower.split() if len(word) > 2]
+    title_words = title_lower.split()
+    return bool(query_words) and all(
+        any(_words_alike(query_word, title_word) for title_word in title_words)
+        for query_word in query_words
+    )
+
+
+# Первый свободный слот нужной длины в дне с планом; None — слота нет
+def _find_free_slot(db_conn, date, duration_min):
+    profile = load_profile(db_conn)
+    window_start = _minutes(profile.get("wake_time", "09:00"))
+    window_end = _minutes(profile.get("sleep_time", "23:30"))
+    if window_end <= window_start:
+        window_end += 24 * 60
+    if date == _today():
+        now = now_local()
+        window_start = max(window_start, ((now.hour * 60 + now.minute + 29) // 30) * 30)
+
+    busy_blocks = []
+    rows = db_conn.execute(
+        "SELECT time_start, duration_min FROM tasks "
+        "WHERE scheduled_date = ? AND time_start IS NOT NULL AND status != 'skipped'",
+        (date,),
+    ).fetchall()
+    for row in rows:
+        block_start = _minutes(row["time_start"])
+        if block_start < window_start - 12 * 60:
+            block_start += 24 * 60  # блок за полуночью
+        busy_blocks.append((block_start, row["duration_min"] or 30))
+
+    cursor = window_start
+    for block_start, block_duration in sorted(busy_blocks):
+        if block_start - cursor >= duration_min:
+            return _hhmm(cursor)
+        cursor = max(cursor, block_start + block_duration)
+    if window_end - cursor >= duration_min:
+        return _hhmm(cursor)
+    return None
+
+
+def tool_move_task(db_conn, query, target_date):
+    today = today_local()
+    date_from = (today - datetime.timedelta(days=7)).isoformat()
+    date_to = (today + datetime.timedelta(days=7)).isoformat()
+    rows = db_conn.execute(
+        "SELECT id, title, scheduled_date, duration_min FROM tasks "
+        "WHERE status = 'pending' AND scheduled_date BETWEEN ? AND ? ORDER BY scheduled_date",
+        (date_from, date_to),
+    ).fetchall()
+    matches = [row for row in rows if _fuzzy_match(query, row["title"])]
+
+    if not matches:
+        return f"Не нашёл невыполненной задачи похожей на «{query}» в диапазоне {date_from}…{date_to}."
+    if len(matches) > 1:
+        options = "; ".join(f"«{row['title']}» ({row['scheduled_date']})" for row in matches)
+        return f"Подходит несколько задач, уточни какую: {options}"
+
+    task = matches[0]
+    source_date = task["scheduled_date"]
+    if source_date == target_date:
+        return f"Задача «{task['title']}» и так стоит на {target_date}."
+
+    # На целевой день есть план — перевставляем по времени в свободный слот
+    target_plan = db_conn.execute(
+        "SELECT id FROM plans WHERE plan_type = 'daily' AND date_from = ? AND status = 'active'",
+        (target_date,),
+    ).fetchone()
+    plan_id = target_plan["id"] if target_plan else None
+    time_start = None
+    time_note = ""
+    if plan_id:
+        time_start = _find_free_slot(db_conn, target_date, task["duration_min"] or 30)
+        time_note = f", время {time_start}" if time_start else ", свободного слота нет — без времени"
+
+    db_conn.execute(
+        "UPDATE tasks SET scheduled_date = ?, plan_id = ?, time_start = ? WHERE id = ?",
+        (target_date, plan_id, time_start, task["id"]),
+    )
+    _recompute_daily_stats(db_conn, source_date)
+    _recompute_daily_stats(db_conn, target_date)
+    return f"Перенёс «{task['title']}» с {source_date} на {target_date}{time_note}."
+
+
 def tool_show_today(db_conn, date=None):
     target_date = date or _today()
     plan = db_conn.execute(
@@ -454,6 +571,7 @@ TOOL_HANDLERS = {
     "create_daily_plan": tool_create_daily_plan,
     "add_task": tool_add_task,
     "complete_task": tool_complete_task,
+    "move_task": tool_move_task,
     "show_today": tool_show_today,
     "generate_day_plan": tool_generate_day_plan,
     "replan_day": tool_replan_day,

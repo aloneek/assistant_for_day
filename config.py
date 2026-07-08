@@ -20,6 +20,14 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 # Ключ Semantic Scholar не обязателен: без него меньше лимиты и чаще 429
 S2_API_KEY = os.getenv("S2_API_KEY", "")
 
+# YouTube Data API v3 (та же консоль Google Cloud, что и Gemini) —
+# метаданные видео для задач; пусто = задачи-видео без длительности
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+
+# Модель для нативного анализа видео (video-input по YouTube URL).
+# У неё отдельная неистраченная квота 20 RPD — видео-запросы редкие
+VIDEO_MODEL = "gemini-3.5-flash"
+
 # Куда Muse шлёт проактивные идеи (личный chat id пользователя).
 # Пусто — проактивные сообщения выключены
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -53,6 +61,8 @@ AGENT_MODELS = {
     "plan_generator": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
     "explorer": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
     "muse": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
+    # текстовая деградация analyze_videos, когда видео-лимит исчерпан
+    "video_meta": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
 }
 
 

@@ -5,6 +5,7 @@
 import datetime
 import json
 
+from agents import video
 from agents.plan_generator import PlanGenerationError, generate_blocks, load_profile
 from config import load_prompt
 from llm.router import get_provider
@@ -88,6 +89,29 @@ PLANNER_TOOLS = [
             "properties": {
                 "date": {"type": "string", "description": "Дата YYYY-MM-DD, по умолчанию сегодня"}
             },
+        },
+    },
+    {
+        "name": "add_video_tasks",
+        "description": "Добавить YouTube-видео как задачи плана: название и длительность подтянутся из метаданных. Вызывай, когда пользователь просит добавить в план видео по ссылкам.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "urls": {"type": "array", "items": {"type": "string"}, "description": "YouTube-ссылки из запроса, без изменений"},
+                "date": {"type": "string", "description": "Дата YYYY-MM-DD, по умолчанию сегодня"},
+            },
+            "required": ["urls"],
+        },
+    },
+    {
+        "name": "analyze_videos",
+        "description": "Проанализировать YouTube-видео: в каком порядке смотреть, на что обратить внимание, что можно фоном. Вызывай, когда пользователь спрашивает про содержимое или порядок просмотра видео.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "urls": {"type": "array", "items": {"type": "string"}, "description": "YouTube-ссылки из запроса, без изменений"},
+            },
+            "required": ["urls"],
         },
     },
     {
@@ -545,6 +569,51 @@ def tool_update_sphere_config(db_conn, sphere_name, config_updates):
     return result
 
 
+# Округление длительности вверх до получаса, минимум 30 минут
+def _round30(minutes):
+    return max(30, ((int(minutes) + 29) // 30) * 30)
+
+
+def tool_add_video_tasks(db_conn, urls, date=None):
+    scheduled_date = date or _today()
+    metadata = video.get_metadata(" ".join(urls))
+
+    plan = db_conn.execute(
+        "SELECT id FROM plans WHERE plan_type = 'daily' AND date_from = ? AND status = 'active'",
+        (scheduled_date,),
+    ).fetchone()
+    plan_id = plan["id"] if plan else None
+
+    added_lines = []
+    if metadata:
+        for item in metadata:
+            duration = _round30(item["duration_min"]) if item["duration_min"] else None
+            db_conn.execute(
+                "INSERT INTO tasks (plan_id, title, task_type, scheduled_date, duration_min) "
+                "VALUES (?, ?, 'study', ?, ?)",
+                (plan_id, f"Видео: {item['title']}", scheduled_date, duration),
+            )
+            duration_note = f"{item['duration_min']} мин → блок {duration}" if duration else "длительность неизвестна"
+            added_lines.append(f"«{item['title']}» ({duration_note})")
+    else:
+        # Нет ключа или API упал — добавляем по ссылкам без длительности
+        for url in urls:
+            db_conn.execute(
+                "INSERT INTO tasks (plan_id, title, task_type, scheduled_date) VALUES (?, ?, 'study', ?)",
+                (plan_id, f"Видео: {url}", scheduled_date),
+            )
+            added_lines.append(url)
+        added_lines.append("(метаданные недоступны — названия и длительность не подтянулись)")
+
+    _recompute_daily_stats(db_conn, scheduled_date)
+    return f"Добавил видео на {scheduled_date}:\n" + "\n".join(added_lines)
+
+
+def tool_analyze_videos(db_conn, urls):
+    metadata = video.get_metadata(" ".join(urls))
+    return video.analyze(urls, metadata)
+
+
 def tool_add_skill(db_conn, name, level="learning"):
     # upsert: навык уже есть — обновляем уровень
     db_conn.execute(
@@ -573,6 +642,8 @@ TOOL_HANDLERS = {
     "complete_task": tool_complete_task,
     "move_task": tool_move_task,
     "show_today": tool_show_today,
+    "add_video_tasks": tool_add_video_tasks,
+    "analyze_videos": tool_analyze_videos,
     "generate_day_plan": tool_generate_day_plan,
     "replan_day": tool_replan_day,
     "log_progress": tool_log_progress,

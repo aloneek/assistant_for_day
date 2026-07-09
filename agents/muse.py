@@ -15,7 +15,7 @@ from agents.plan_generator import load_profile
 from config import MUSE_INTERVAL_DAYS, TELEGRAM_CHAT_ID, load_prompt
 from llm.structured import StructuredRequestError, request_json_array
 from search import arxiv, habr, hackernews
-from timeutils import now_local
+from timeutils import in_wake_window, now_local
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +53,7 @@ def is_due(db_conn):
         return False
 
     profile = load_profile(db_conn)
-    now = now_local()
-    now_min = now.hour * 60 + now.minute
-    wake = _to_minutes(profile.get("wake_time", "09:00"))
-    sleep = _to_minutes(profile.get("sleep_time", "23:30"))
-    # Отбой за полуночью: бодрствование = после подъёма ИЛИ до отбоя
-    in_wake_window = (wake <= now_min < sleep) if wake < sleep else (now_min >= wake or now_min < sleep)
-    if not in_wake_window:
+    if not in_wake_window(profile.get("wake_time", "09:00"), profile.get("sleep_time", "23:30")):
         return False
 
     last = db_conn.execute(
@@ -71,11 +65,6 @@ def is_due(db_conn):
         "SELECT julianday('now') - julianday(?) AS days", (last,)
     ).fetchone()["days"]
     return days_passed >= MUSE_INTERVAL_DAYS
-
-
-def _to_minutes(hhmm):
-    hours, minutes = hhmm.split(":")
-    return int(hours) * 60 + int(minutes)
 
 
 async def _fetch_trends():

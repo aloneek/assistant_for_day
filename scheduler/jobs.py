@@ -7,8 +7,8 @@
 import asyncio
 import logging
 
-from agents import github_sync, muse
-from bot.keyboards import build_idea_keyboard
+from agents import coach, github_sync, muse
+from bot.keyboards import build_idea_keyboard, build_review_keyboard
 from bot.messaging import split_message
 from config import TELEGRAM_CHAT_ID
 
@@ -22,11 +22,30 @@ def register_jobs(scheduler, bot, db_conn):
     scheduler.add_job(muse_tick, "interval", hours=1, args=[bot, db_conn])
     # Раз в неделю обновляем профиль проектов из GitHub (тихо, без сообщения)
     scheduler.add_job(github_tick, "cron", day_of_week="mon", hour=12, args=[db_conn])
+    # Недельное ревью Coach: воскресенье вечером; ready_for_review
+    # проверяет окно бодрствования и что сегодня ревью ещё не было
+    scheduler.add_job(coach_tick, "cron", day_of_week="sun", hour=19, args=[bot, db_conn])
 
 
 async def github_tick(db_conn):
     result = await asyncio.to_thread(github_sync.run, db_conn)
     logger.info("Недельный sync_github: %s", result.split(chr(10))[0])
+
+
+async def coach_tick(bot, db_conn):
+    if not TELEGRAM_CHAT_ID:
+        return
+    if not await asyncio.to_thread(coach.ready_for_review, db_conn):
+        logger.info("Coach: вне окна бодрствования или ревью уже было — пропускаю")
+        return
+
+    logger.info("Coach: собираю недельное ревью")
+    review_text, suggestion = await asyncio.to_thread(coach.build_weekly_review, db_conn)
+    parts = split_message(f"🧭 Недельное ревью\n\n{review_text}")
+    # Кнопки применения предложения — на последней части
+    for part in parts[:-1]:
+        await bot.send_message(TELEGRAM_CHAT_ID, part)
+    await bot.send_message(TELEGRAM_CHAT_ID, parts[-1], reply_markup=build_review_keyboard(suggestion))
 
 
 async def muse_tick(bot, db_conn):

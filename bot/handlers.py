@@ -100,3 +100,33 @@ async def on_idea_archive(callback: CallbackQuery, db_conn):
     db_conn.commit()
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Идея в архиве 📥")
+
+
+# Кнопка «✅ Применить» под ревью Coach: правка конфига сферы через
+# готовый инструмент Planner (он же пересоберёт план на сегодня)
+@router.callback_query(F.data.startswith("review_apply:"))
+async def on_review_apply(callback: CallbackQuery, db_conn):
+    _, sphere_id, config_key, config_value = callback.data.split(":")
+    sphere = db_conn.execute("SELECT name FROM spheres WHERE id = ?", (int(sphere_id),)).fetchone()
+    if sphere is None:
+        await callback.answer("Сфера не найдена")
+        return
+
+    await callback.answer("Применяю…")
+    await callback.message.bot.send_chat_action(callback.message.chat.id, "typing")
+
+    def apply_change():
+        result = planner.tool_update_sphere_config(db_conn, sphere["name"], {config_key: int(config_value)})
+        db_conn.commit()
+        return result
+
+    result = await asyncio.to_thread(apply_change)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    for part in split_message(result):
+        await callback.message.answer(part, reply_markup=build_plan_keyboard(part))
+
+
+@router.callback_query(F.data == "review_keep")
+async def on_review_keep(callback: CallbackQuery):
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Ок, оставляем как есть")

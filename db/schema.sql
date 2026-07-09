@@ -86,6 +86,15 @@ CREATE TABLE IF NOT EXISTS user_context (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Недельные ревью Coach: метрики и текст остаются для истории
+CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_date TEXT NOT NULL,          -- YYYY-MM-DD
+    metrics TEXT NOT NULL DEFAULT '{}', -- JSON: сырые цифры недели
+    review_text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- История выполнения: сырьё для скользящего среднего Coach
 CREATE TABLE IF NOT EXISTS daily_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

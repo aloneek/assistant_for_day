@@ -48,6 +48,18 @@ def build_idea_keyboard(idea_id):
     ]])
 
 
+# Кнопки под недельным ревью Coach: применить расчётное предложение
+# (конкретная правка конфига сферы) или оставить всё как есть
+def build_review_keyboard(suggestion):
+    if not suggestion:
+        return None
+    apply_data = f"review_apply:{suggestion['sphere_id']}:{suggestion['key']}:{suggestion['value']}"
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Применить", callback_data=apply_data),
+        InlineKeyboardButton(text="Оставить как есть", callback_data="review_keep"),
+    ]])
+
+
 # Правит текст сообщения после нажатия кнопки: меняет иконку задачи
 # на ✅ и пересчитывает строку «Выполнено: N из M»
 def mark_task_done_in_text(message_text, task_id):

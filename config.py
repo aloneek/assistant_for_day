@@ -68,6 +68,7 @@ AGENT_MODELS = {
     "video_meta": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
     # сжатие GitHub-реп в профиль проектов
     "github_sync": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
+    "coach": ["gemini-flash-lite", "gemini-flash", "groq-llama"],
 }
 
 

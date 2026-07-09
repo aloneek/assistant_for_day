@@ -84,8 +84,8 @@ PLANNER_TOOLS = [
         },
     },
     {
-        "name": "show_today",
-        "description": "Показать план и задачи на дату со статусами.",
+        "name": "show_day_plan",
+        "description": "Полный список задач дня: все задачи, отсортированные по времени, со статусами. Вызывай на «покажи список задач», «что в плане», «что на сегодня», а также чтобы назвать первую/следующую невыполненную задачу.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -454,15 +454,18 @@ def tool_move_task(db_conn, query, target_date):
     return f"Перенёс «{task['title']}» с {source_date} на {target_date}{time_note}."
 
 
-def tool_show_today(db_conn, date=None):
+# Чистый дамп дня из БД: ВСЕ задачи по порядку времени, без анализа
+# и сокращений. Формат строки завязан на кнопки (bot/keyboards.py)
+def tool_show_day_plan(db_conn, date=None):
     target_date = date or _today()
     plan = db_conn.execute(
         "SELECT id, title FROM plans WHERE plan_type = 'daily' AND date_from = ? AND status = 'active'",
         (target_date,),
     ).fetchone()
     tasks = db_conn.execute(
-        "SELECT id, title, task_type, status, time_start, duration_min FROM tasks "
-        "WHERE scheduled_date = ? ORDER BY time_start IS NULL, time_start, id",
+        "SELECT t.id, t.title, t.status, t.time_start, t.duration_min, s.name AS sphere_name "
+        "FROM tasks t LEFT JOIN spheres s ON t.sphere_id = s.id "
+        "WHERE t.scheduled_date = ? ORDER BY t.time_start IS NULL, t.time_start, t.id",
         (target_date,),
     ).fetchall()
 
@@ -473,12 +476,13 @@ def tool_show_today(db_conn, date=None):
     lines = [header]
     for task in tasks:
         icon = STATUS_ICONS.get(task["status"], "⬜️")
-        # Блок со временем: «⬜️ [7] 09:00–10:00 · Матан: глава 5 (study)»
+        line = f"{icon} [{task['id']}] "
         if task["time_start"] and task["duration_min"]:
-            time_range = f"{task['time_start']}–{_hhmm(_minutes(task['time_start']) + task['duration_min'])}"
-            lines.append(f"{icon} [{task['id']}] {time_range} · {task['title']} ({task['task_type']})")
-        else:
-            lines.append(f"{icon} [{task['id']}] {task['title']} ({task['task_type']})")
+            line += f"{task['time_start']}–{_hhmm(_minutes(task['time_start']) + task['duration_min'])} · "
+        line += task["title"]
+        if task["sphere_name"]:
+            line += f" · ({task['sphere_name']})"
+        lines.append(line)
     done_count = sum(1 for task in tasks if task["status"] == "done")
     lines.append(f"Выполнено: {done_count} из {len(tasks)}")
     return "\n".join(lines)
@@ -487,8 +491,12 @@ def tool_show_today(db_conn, date=None):
 # Общий низ generate_day_plan и replan_day: генерирует блоки из сфер,
 # заменяет невыполненные задачи даты новыми, done не трогает
 def _rebuild_day(db_conn, date, notes, window_start):
+    # Переносим только задачи вне сфер (лабы, встречи, видео): сферные
+    # блоки генератор пересоздаёт сам из конфигов — если передавать их
+    # как обязательные, повторная генерация плодит дубли
     carry_rows = db_conn.execute(
-        "SELECT title, task_type, duration_min FROM tasks WHERE scheduled_date = ? AND status = 'pending'",
+        "SELECT title, task_type, duration_min FROM tasks "
+        "WHERE scheduled_date = ? AND status = 'pending' AND sphere_id IS NULL",
         (date,),
     ).fetchall()
     carry_tasks = [dict(row) for row in carry_rows]
@@ -524,7 +532,7 @@ def _rebuild_day(db_conn, date, notes, window_start):
              block["sphere_id"], block["time_start"], block["duration_min"]),
         )
     _recompute_daily_stats(db_conn, date)
-    return tool_show_today(db_conn, date)
+    return tool_show_day_plan(db_conn, date)
 
 
 # Начало окна планирования: на будущую дату — с подъёма (None = решит
@@ -671,7 +679,7 @@ TOOL_HANDLERS = {
     "add_task": tool_add_task,
     "complete_task": tool_complete_task,
     "move_task": tool_move_task,
-    "show_today": tool_show_today,
+    "show_day_plan": tool_show_day_plan,
     "add_video_tasks": tool_add_video_tasks,
     "analyze_videos": tool_analyze_videos,
     "generate_day_plan": tool_generate_day_plan,

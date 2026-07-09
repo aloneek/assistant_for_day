@@ -84,6 +84,20 @@ PLANNER_TOOLS = [
         },
     },
     {
+        "name": "move_tasks",
+        "description": "Перенести НЕСКОЛЬКО невыполненных задач за раз по критерию: по сфере («перенеси видео/фильмы»), по типу, по слову в названии или все задачи дня («перенеси всё с завтра»). Что не влезет по времени в целевой день — останется на месте, об этом будет сказано. Без target_date задачи снимаются с даты («убери X с завтра»). Для одной конкретной задачи используй move_task.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "target_date": {"type": "string", "description": "Куда перенести, YYYY-MM-DD. Не передавай, если нужно просто снять задачи с даты"},
+                "source_date": {"type": "string", "description": "Откуда, YYYY-MM-DD; без неё — поиск за ±7 дней"},
+                "sphere_name": {"type": "string", "description": "Критерий: сфера задач (видео, фильм, книга, матан...)"},
+                "task_type": {"type": "string", "enum": ["work", "study", "rest"], "description": "Критерий: тип задач"},
+                "title_query": {"type": "string", "description": "Критерий: слово из названий задач"},
+            },
+        },
+    },
+    {
         "name": "show_day_plan",
         "description": "Полный список задач дня: все задачи, отсортированные по времени, со статусами. Вызывай на «покажи список задач», «что в плане», «что на сегодня», а также чтобы назвать первую/следующую невыполненную задачу.",
         "parameters": {
@@ -426,7 +440,9 @@ def tool_move_task(db_conn, query, target_date):
         return f"Не нашёл невыполненной задачи похожей на «{query}» в диапазоне {date_from}…{date_to}."
     if len(matches) > 1:
         options = "; ".join(f"«{row['title']}» ({row['scheduled_date']})" for row in matches)
-        return f"Подходит несколько задач, уточни какую: {options}"
+        return (f"Подходит несколько задач: {options}. Если нужно перенести их ВСЕ — "
+                f"вызови move_tasks с критерием (title_query=«{query}» или сфера). "
+                "Если одну — уточни у пользователя какую.")
 
     task = matches[0]
     source_date = task["scheduled_date"]
@@ -452,6 +468,104 @@ def tool_move_task(db_conn, query, target_date):
     _recompute_daily_stats(db_conn, source_date)
     _recompute_daily_stats(db_conn, target_date)
     return f"Перенёс «{task['title']}» с {source_date} на {target_date}{time_note}."
+
+
+# Групповой перенос по критерию. Задачи, не влезшие в свободные слоты
+# целевого дня, остаются на месте — про них честно говорим пользователю
+def tool_move_tasks(db_conn, target_date=None, source_date=None,
+                    sphere_name=None, task_type=None, title_query=None):
+    if not any([sphere_name, task_type, title_query, source_date]):
+        return "Уточни критерий переноса: сфера, тип, слово из названия или дата, с которой забрать всё."
+
+    sphere_id = None
+    if sphere_name:
+        sphere, error_text = _find_sphere(db_conn, sphere_name)
+        if sphere is None:
+            return error_text
+        sphere_id = sphere["id"]
+
+    today = today_local()
+    query = "SELECT id, title, scheduled_date, duration_min FROM tasks WHERE status = 'pending'"
+    params = []
+    if source_date:
+        query += " AND scheduled_date = ?"
+        params.append(source_date)
+    else:
+        query += " AND scheduled_date BETWEEN ? AND ?"
+        params += [(today - datetime.timedelta(days=7)).isoformat(),
+                   (today + datetime.timedelta(days=7)).isoformat()]
+    if target_date:
+        query += " AND scheduled_date != ?"
+        params.append(target_date)
+    if sphere_id:
+        query += " AND sphere_id = ?"
+        params.append(sphere_id)
+    if task_type:
+        query += " AND task_type = ?"
+        params.append(task_type)
+    query += " ORDER BY scheduled_date, time_start IS NULL, time_start, id"
+
+    tasks = db_conn.execute(query, params).fetchall()
+    if title_query:
+        tasks = [task for task in tasks if _fuzzy_match(title_query, task["title"])]
+    if not tasks:
+        return "Не нашёл невыполненных задач по этому критерию."
+
+    source_dates = {task["scheduled_date"] for task in tasks}
+
+    # Без целевой даты — снимаем задачи с их дат («убери X с завтра»)
+    if not target_date:
+        for task in tasks:
+            db_conn.execute(
+                "UPDATE tasks SET scheduled_date = NULL, plan_id = NULL, time_start = NULL WHERE id = ?",
+                (task["id"],),
+            )
+        for date in source_dates:
+            _recompute_daily_stats(db_conn, date)
+        titles = "; ".join(f"«{task['title']}»" for task in tasks)
+        return f"Снял с плана {len(tasks)} задач(и): {titles}. Они без даты — верну в план, когда скажешь куда."
+
+    target_plan = db_conn.execute(
+        "SELECT id FROM plans WHERE plan_type = 'daily' AND date_from = ? AND status = 'active'",
+        (target_date,),
+    ).fetchone()
+    plan_id = target_plan["id"] if target_plan else None
+
+    moved_lines = []
+    leftover = []
+    for task in tasks:
+        time_start = None
+        if plan_id:
+            # Слоты ищем последовательно: каждый перенесённый блок
+            # сразу занимает время и виден следующему поиску
+            time_start = _find_free_slot(db_conn, target_date, task["duration_min"] or 30)
+            if time_start is None:
+                leftover.append(task)
+                continue
+        db_conn.execute(
+            "UPDATE tasks SET scheduled_date = ?, plan_id = ?, time_start = ? WHERE id = ?",
+            (target_date, plan_id, time_start, task["id"]),
+        )
+        if time_start:
+            end = _hhmm(_minutes(time_start) + (task["duration_min"] or 30))
+            moved_lines.append(f"⬜️ [{task['id']}] {time_start}–{end} · {task['title']}")
+        else:
+            moved_lines.append(f"⬜️ [{task['id']}] {task['title']}")
+
+    for date in source_dates | {target_date}:
+        _recompute_daily_stats(db_conn, date)
+
+    if not moved_lines:
+        titles = "; ".join(f"«{task['title']}»" for task in leftover)
+        return (f"Ни одна из {len(tasks)} задач не влезла в свободные слоты {target_date}: {titles}. "
+                "Сдвинуть план (пересобрать день) или перенести на другой день?")
+
+    lines = [f"Перенёс на {target_date} ({len(moved_lines)} из {len(tasks)}):"] + moved_lines
+    if leftover:
+        titles = "; ".join(f"«{task['title']}»" for task in leftover)
+        lines.append(f"\nНе поместились по времени ({len(leftover)}): {titles} — "
+                     "сдвинуть план (пересобрать день) или перенести на другой день?")
+    return "\n".join(lines)
 
 
 # Чистый дамп дня из БД: ВСЕ задачи по порядку времени, без анализа
@@ -491,12 +605,15 @@ def tool_show_day_plan(db_conn, date=None):
 # Общий низ generate_day_plan и replan_day: генерирует блоки из сфер,
 # заменяет невыполненные задачи даты новыми, done не трогает
 def _rebuild_day(db_conn, date, notes, window_start):
-    # Переносим только задачи вне сфер (лабы, встречи, видео): сферные
-    # блоки генератор пересоздаёт сам из конфигов — если передавать их
-    # как обязательные, повторная генерация плодит дубли
+    # Переносим задачи вне сфер (лабы, встречи) и задачи сфер с
+    # carry_tasks в конфиге (конкретные ролики видео): их содержимое
+    # уникально. Обычные сферные блоки генератор пересоздаёт сам из
+    # конфигов — если передавать их как обязательные, генерация плодит дубли
     carry_rows = db_conn.execute(
-        "SELECT title, task_type, duration_min FROM tasks "
-        "WHERE scheduled_date = ? AND status = 'pending' AND sphere_id IS NULL",
+        "SELECT t.title, t.task_type, t.duration_min FROM tasks t "
+        "LEFT JOIN spheres s ON t.sphere_id = s.id "
+        "WHERE t.scheduled_date = ? AND t.status = 'pending' "
+        "AND (t.sphere_id IS NULL OR json_extract(s.config, '$.carry_tasks') = 1)",
         (date,),
     ).fetchall()
     carry_tasks = [dict(row) for row in carry_rows]
@@ -621,15 +738,18 @@ def tool_add_video_tasks(db_conn, urls, date=None):
         (scheduled_date,),
     ).fetchone()
     plan_id = plan["id"] if plan else None
+    # Привязка к сфере «видео»: групповой перенос находит их по критерию
+    video_sphere = db_conn.execute("SELECT id FROM spheres WHERE name = 'видео'").fetchone()
+    sphere_id = video_sphere["id"] if video_sphere else None
 
     added_lines = []
     if metadata:
         for item in metadata:
             duration = _round30(item["duration_min"]) if item["duration_min"] else None
             db_conn.execute(
-                "INSERT INTO tasks (plan_id, title, task_type, scheduled_date, duration_min) "
-                "VALUES (?, ?, 'study', ?, ?)",
-                (plan_id, f"Видео: {item['title']}", scheduled_date, duration),
+                "INSERT INTO tasks (plan_id, title, task_type, scheduled_date, sphere_id, duration_min) "
+                "VALUES (?, ?, 'study', ?, ?, ?)",
+                (plan_id, f"Видео: {item['title']}", scheduled_date, sphere_id, duration),
             )
             duration_note = f"{item['duration_min']} мин → блок {duration}" if duration else "длительность неизвестна"
             added_lines.append(f"«{item['title']}» ({duration_note})")
@@ -637,8 +757,8 @@ def tool_add_video_tasks(db_conn, urls, date=None):
         # Нет ключа или API упал — добавляем по ссылкам без длительности
         for url in urls:
             db_conn.execute(
-                "INSERT INTO tasks (plan_id, title, task_type, scheduled_date) VALUES (?, ?, 'study', ?)",
-                (plan_id, f"Видео: {url}", scheduled_date),
+                "INSERT INTO tasks (plan_id, title, task_type, scheduled_date, sphere_id) VALUES (?, ?, 'study', ?, ?)",
+                (plan_id, f"Видео: {url}", scheduled_date, sphere_id),
             )
             added_lines.append(url)
         added_lines.append("(метаданные недоступны — названия и длительность не подтянулись)")
@@ -679,6 +799,7 @@ TOOL_HANDLERS = {
     "add_task": tool_add_task,
     "complete_task": tool_complete_task,
     "move_task": tool_move_task,
+    "move_tasks": tool_move_tasks,
     "show_day_plan": tool_show_day_plan,
     "add_video_tasks": tool_add_video_tasks,
     "analyze_videos": tool_analyze_videos,

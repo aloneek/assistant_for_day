@@ -69,6 +69,14 @@ SPHERES = [
         "priority": 50,
         "config": {"weighted": True, "duration_min": 30},
     },
+    {
+        "name": "видео",
+        "sphere_type": "learning",
+        "priority": 55,
+        # carry_tasks: задачи сферы — конкретные ролики, при перегенерации
+        # плана они переносятся как есть, генератор своих не придумывает
+        "config": {"carry_tasks": True, "source": "youtube"},
+    },
 ]
 
 
